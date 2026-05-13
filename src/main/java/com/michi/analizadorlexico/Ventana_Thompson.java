@@ -79,6 +79,14 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
         @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
 });
+
+        // La lista de transiciones depende únicamente de la expresión
+        // regular, por lo que se refresca tan pronto como ésta cambia.
+        tExpresion.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+        @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+        @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+        @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+});
     }
     
     
@@ -272,11 +280,15 @@ public class Ventana_Thompson extends javax.swing.JFrame {
     private void ejecutarAnalisis() {
         tSalida.setText("");
         tError.setText("");
+        tTrans.setText("");
         DefaultTableModel modelo = (DefaultTableModel) tablaSimbolo.getModel();
         modelo.setRowCount(0);
 
         String expresion = tExpresion.getText();
         String entrada = tIngreso.getText();
+
+        // Listado de transiciones del AFN de Thompson (delegado a Transitions).
+        tTrans.setText(Transitions.generar(expresion));
 
         if (expresion == null || expresion.trim().isEmpty()) {
             tError.append("Error: la expresión regular está vacía.\n");
