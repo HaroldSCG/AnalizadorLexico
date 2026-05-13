@@ -9,8 +9,8 @@ package com.michi.analizadorlexico;
 %column
 %type Token
 
-%state STRING
-%state COMMENT_BLOCK
+%xstate STRING
+%xstate COMMENT_BLOCK
 
 %{
   /** Token con tipo, lexema, línea y columna (1-based para mostrar) */
@@ -29,28 +29,30 @@ package com.michi.analizadorlexico;
 
     @Override
     public String toString() {
-      return type + "(" + lexeme + ")";
+      return String.format("[Linea %d: Columna %d] %s(%s)", line, col, type, lexeme);
     }
   }
 
   private Token tok(String type) {
     return new Token(type, yytext(), yyline, yycolumn);
   }
-  private Token tok(String type, String lex) {
-    return new Token(type, lex, yyline, yycolumn);
+    private Token err(String type) {
+    return new Token(type, yytext(), yyline, yycolumn);
   }
 
-  private Token err(String message) {
-    return new Token("ERROR", message, yyline, yycolumn);
-  }
-
-  private StringBuilder str = new StringBuilder();
+    /* Acumulador de literales de cadena. */
+  private final StringBuilder str = new StringBuilder();
   private int strLine0 = 0;
   private int strCol0  = 0;
 
   private Token stringTok() {
     return new Token("STRING", str.toString(), strLine0, strCol0);
   }
+
+  /* Estado de comentarios de bloque con anidamiento. */
+  private int commentDepth = 0;
+  private int commentLine0 = 0;
+  private int commentCol0  = 0;
 %}
 
 /* ==sdfasdf== */
@@ -59,9 +61,12 @@ NewLine       = \r\n|\r|\n
 
 Digit         = [0-9]
 Int           = {Digit}+
-Dec           = {Int}"."{Int}     /* 123.45 */
+Dec           = {Int}"."{Int}
 Exp           = ([eE][+-]?{Int})
 Num           = ({Dec}|{Int})({Exp})?
+
+Hex           = 0[xX][0-9A-Fa-f]+
+Bin           = 0[bB][01]+
 
 IdStart       = [A-Za-z_]
 IdPart        = [A-Za-z0-9_]
@@ -69,39 +74,60 @@ Identifier    = {IdStart}{IdPart}*
 
 %%
 
-/* ======== NORMAL ======== */
-<YYINITIAL>{
+/* ========estado NORMAL ======== */
+<YYINITIAL> {
 
-  {Whitespace}               { /* ignore */ }
-  {NewLine}                  { /* ignore */ }
+  {Whitespace}                       { /* ignorar */ }
+  {NewLine}                          { /* ignorar */ }
 
-  /* Comentarios: primero los comentarios, luego el / como operador */
-  "//".*                     { /* ignore */ }
-  "/*"                       { yybegin(COMMENT_BLOCK); }
+  /* Comentarios (antes que el operador '/') */
+  "//" [^\r\n]*                      { /* comentario de linea */ }
+  "/*"                               { commentDepth = 1;
+                                       commentLine0 = yyline;
+                                       commentCol0  = yycolumn;
+                                       yybegin(COMMENT_BLOCK); }
 
-  /* Strings */
-  "\""                       { str.setLength(0); strLine0 = yyline; strCol0 = yycolumn; yybegin(STRING); }
+  /* Apertura de cadena */
+  "\""                               { str.setLength(0);
+                                       strLine0 = yyline;
+                                       strCol0  = yycolumn;
+                                       yybegin(STRING); }
 
   /* Keywords */
+  /* Literal de caracter */
+  "'" ( [^\\'\r\n] | "\\" . ) "'"    { return tok("CHAR"); }
+  "'" ( [^\\'\r\n] | "\\" . )        { return err("ERROR_CHAR_NO_CERRADO"); }
+ 
+ /* Palabras reservadas */
   "if"|"else"|"while"|"for"|"return"|"int"|"double"|"string"|"true"|"false"
-                             { return tok("KEYWORD"); }
+                                     { return tok("KEYWORD"); }
 
-  /* Operadores compuestos (maximal munch) */
-  "<="                       { return tok("LESS_EQUAL"); }
-  ">="                       { return tok("GREATER_EQUAL"); }
-  "=="                       { return tok("EQUAL_EQUAL"); }
-  "!="                       { return tok("NOT_EQUAL"); }
-  "&&"                       { return tok("AND"); }
-  "||"                       { return tok("OR"); }
+  /* Operadores compuestos (deben ir antes que los simples por maximal munch) */
+  "<="                               { return tok("LESS_EQUAL"); }
+  ">="                               { return tok("GREATER_EQUAL"); }
+  "=="                               { return tok("EQUAL_EQUAL"); }
+  "!="                               { return tok("NOT_EQUAL"); }
+  "&&"                               { return tok("AND"); }
+  "||"                               { return tok("OR"); }
+  "++"                               { return tok("INC"); }
+  "--"                               { return tok("DEC"); }
+  "+="                               { return tok("PLUS_ASSIGN"); }
+  "-="                               { return tok("MINUS_ASSIGN"); }
+  "*="                               { return tok("MULT_ASSIGN"); }
+  "/="                               { return tok("DIV_ASSIGN"); }
 
   /* Operadores simples */
-  "+"                        { return tok("PLUS"); }
-  "-"                        { return tok("MINUS"); }
-  "*"                        { return tok("MULTIPLY"); }
-  "/"                        { return tok("DIVIDE"); }
-  "="                        { return tok("ASSIGN"); }
-  "<"                        { return tok("LESS"); }
-  ">"                        { return tok("GREATER"); }
+  "+"                                { return tok("PLUS"); }
+  "-"                                { return tok("MINUS"); }
+  "*"                                { return tok("MULTIPLY"); }
+  "/"                                { return tok("DIVIDE"); }
+  "%"                                { return tok("MOD"); }
+  "="                                { return tok("ASSIGN"); }
+  "<"                                { return tok("LESS"); }
+  ">"                                { return tok("GREATER"); }
+  "!"                                { return tok("NOT"); }
+  "?"                                { return tok("QUESTION"); }
+  ":"                                { return tok("COLON"); }
 
   /* Agrupación */
   "("                        { return tok("LPAREN"); }
@@ -117,54 +143,67 @@ Identifier    = {IdStart}{IdPart}*
   "."                        { return tok("DOT"); }
 
   /* Números */
-  {Num}                      { return tok("NUMBER"); }
+  /* Numeros: hex/bin antes que {Num} para desambiguar el prefijo '0' */
+  {Hex}                              { return tok("NUMBER"); }
+  {Bin}                              { return tok("NUMBER"); }
+  {Num}                              { return tok("NUMBER"); }
 
-  /* Números mal formados (ej: 12. o .5 o 1e o 1e+) */
-  {Int}"."                   { return err("NUMERO_MAL_FORMADO:" + yytext()); }
-  "."{Int}                   { return err("NUMERO_MAL_FORMADO:" + yytext()); }
-  {Int}([eE][+-]?)           { return err("NUMERO_MAL_FORMADO:" + yytext()); }
+  /* Errores numericos: solo ganan cuando {Num} NO logro un match mas largo. */
+  {Int}"."                           { return err("ERROR_NUMERO_MALFORMADO"); }
+  "."{Int}                           { return err("ERROR_NUMERO_MALFORMADO"); }
+  {Int}([eE][+-]?)                   { return err("ERROR_NUMERO_MALFORMADO"); }
 
   /* Identificadores */
   {Identifier}               { return tok("IDENTIFIER"); }
 
-  /* Identificador mal formado (12abc) */
-  {Int}{Identifier}          { return err("IDENTIFICADOR_MAL_FORMADO:" + yytext()); }
+  /* Identificador mal formado (12abc, 0xGG, etc.) */
+  {Int}{Identifier}                  { return err("ERROR_IDENTIFICADOR_MALFORMADO"); }
 
-  /* Símbolo inválido */
-  .                          { return err("SIMBOLO_INVALIDO:" + yytext()); }
+  /* Simbolo invalido */
+  .                                  { return err("ERROR_SIMBOLO_INVALIDO"); }
+}
+/* === Eestado STRING === */
+<STRING> {
+  "\""                               { yybegin(YYINITIAL); return stringTok(); }
+
+  "\\n"                              { str.append('\n'); }
+  "\\t"                              { str.append('\t'); }
+  "\\r"                              { str.append('\r'); }
+  "\\\""                             { str.append('\"'); }
+  "\\\\"                             { str.append('\\'); }
+
+  /* Escape Unicode \uHHHH */
+  "\\u" [0-9A-Fa-f]{4}               { str.append((char) Integer.parseInt(yytext().substring(2), 16)); }
+
+  /* Escape generico: \x -> x */
+  "\\" .                             { str.append(yytext().charAt(1)); }
+
+  /* Contenido normal (sin backslash, comilla ni salto de linea) */
+  [^\\\"\r\n]+                       { str.append(yytext()); }
+
+  /* Salto de linea sin cerrar => error */
+  {NewLine}                          { yybegin(YYINITIAL);
+                                       return new Token("ERROR_CADENA_NO_CERRADA",
+                                                        str.toString(), strLine0, strCol0); }
+  /* EOF dentro de cadena => error */
+  <<EOF>>                            { yybegin(YYINITIAL);
+                                       return new Token("ERROR_CADENA_NO_CERRADA",
+                                                        str.toString(), strLine0, strCol0); }
 }
 
-/* ======== STRING ======== */
-<STRING>{
-  "\""                       { yybegin(YYINITIAL); return stringTok(); }
-
-  "\\n"                      { str.append('\n'); }
-  "\\t"                      { str.append('\t'); }
-  "\\r"                      { str.append('\r'); }
-  "\\\""                     { str.append('\"'); }
-  "\\\\"                     { str.append('\\'); }
-
-  /* escape genérico: \x -> guarda x */
-  "\\."                      { str.append(yytext().charAt(1)); }
-
-  /* contenido normal (sin backslash, sin comillas, sin salto de línea) */
-  [^\\\"\r\n]+               { str.append(yytext()); }
-
-  /* salto de línea dentro del string => no cerrada */
-  {NewLine}                  { yybegin(YYINITIAL); return new Token("ERROR", "CADENA_NO_CERRADA", strLine0, strCol0); }
-
-  .                          { str.append(yytext()); }
-}
-
-/* ======== COMMENT_BLOCK ======== */
-<COMMENT_BLOCK>{
-  "*/"                       { yybegin(YYINITIAL); }
+/* === Estado COMMENT_BLOCK (con anidamiento) === */
+<COMMENT_BLOCK> {
+  "/*"                               { commentDepth++; }
+  "*/"                               { if (--commentDepth == 0) yybegin(YYINITIAL); }
 
   /* consume cualquier cosa dentro del comentario, incluyendo nuevas líneas */
-  (.|{NewLine})              { /* ignore */ }
+  (.|{NewLine})                      { /* ignorar contenido del comentario */ }
 
-  <<EOF>>                    { yybegin(YYINITIAL); return err("COMENTARIO_NO_CERRADO"); }
-}
+  <<EOF>>                            { yybegin(YYINITIAL);
+                                       commentDepth = 0;
+                                       return new Token("ERROR_COMENTARIO_NO_CERRADO",
+                                                        "", commentLine0, commentCol0); }
 
 /* EOF normal */
 <<EOF>>                      { return null; }
+}
