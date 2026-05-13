@@ -27,10 +27,8 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 
-import javax.swing.JFrame;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.WindowConstants;
 
 import com.michi.analizadorlexico.Ventana_Thompson.AFN;
 import com.michi.analizadorlexico.Ventana_Thompson.ConstructorAFN_Thompson;
@@ -111,11 +109,20 @@ public final class Transitions {
     }
 
     /**
-     * Abre (o reutiliza) la ventana del diagrama y dibuja el AFN
-     * correspondiente a {@code expresion}. Si la expresión contiene
-     * varios patrones ({@code TIPO=regex;...}) se muestra únicamente
-     * el primero. Si la expresión es vacía o inválida, en lugar del
-     * grafo se muestra un mensaje informativo en el lienzo.
+     * Abre (o reutiliza) la ventana {@link Diagrama} y dibuja en su
+     * {@code JPanel jGraph} el AFN correspondiente a {@code expresion}.
+     * Si la expresión contiene varios patrones ({@code TIPO=regex;...})
+     * se muestra únicamente el primero. Si la expresión es vacía o
+     * inválida, en lugar del grafo se muestra un mensaje informativo
+     * dentro del propio {@code jGraph}.
+     *
+     * <p>El {@code JPanel jGraph} de {@link Diagrama} está declarado
+     * {@code private} por NetBeans en {@code initComponents()} y su
+     * declaración no debe modificarse manualmente, por lo que aquí lo
+     * obtenemos vía reflexión. De este modo, toda la integración con
+     * {@link Diagrama} vive exclusivamente en este archivo y la clase
+     * {@link Diagrama} permanece intacta (justo como la genera
+     * NetBeans).</p>
      */
     public static void mostrarDiagrama(String expresion) {
         crearVentanaSiHaceFalta();
@@ -217,32 +224,67 @@ public final class Transitions {
     //   VENTANA DEL DIAGRAMA (creación programática, sin .form)
     // =================================================================
 
-    private static JFrame ventanaDiagrama;
-    private static JPanel jGraph;          // único JPanel del frame.
-    private static LienzoGrafo lienzo;     // hijo de jGraph que pinta.
+    private static Diagrama ventanaDiagrama;
+    private static LienzoGrafo lienzo;     // hijo de Diagrama.jGraph que pinta.
 
-    /** Crea la ventana la primera vez (o si fue cerrada con DISPOSE). */
+    /**
+     * Crea la ventana {@link Diagrama} la primera vez (o si fue
+     * cerrada y ya no es {@code isDisplayable}). Después de
+     * {@code initComponents}, sustituye el contenido de {@code jGraph}
+     * por un {@code JScrollPane} que envuelve al {@link LienzoGrafo}.
+     */
     private static void crearVentanaSiHaceFalta() {
         if (ventanaDiagrama != null && ventanaDiagrama.isDisplayable()) return;
 
-        ventanaDiagrama = new JFrame("Diagrama de Thompson");
-        ventanaDiagrama.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
-        ventanaDiagrama.setPreferredSize(new Dimension(900, 500));
+        ventanaDiagrama = new Diagrama();
+        ventanaDiagrama.setTitle("Diagrama de Thompson");
 
-        // jGraph: el único JPanel exigido por el enunciado, ocupa toda
-        // la ventana. Como el grafo puede ser más grande que el frame,
-        // dentro de él colocamos un JScrollPane que envuelve al lienzo
-        // de pintura real.
-        jGraph = new JPanel(new BorderLayout());
-        jGraph.setBackground(Color.WHITE);
+        JPanel jGraph = obtenerJGraph(ventanaDiagrama);
+
+        // El GroupLayout que pone NetBeans en jGraph define su tamaño
+        // preferido (p.ej. 884×388). Lo capturamos antes de sustituir
+        // el layout para que el JFrame no encoja al instalar el
+        // BorderLayout interno, que reportaría el tamaño preferido
+        // del JScrollPane (mucho menor).
+        Dimension prefOriginal = jGraph.getPreferredSize();
+
+        jGraph.removeAll();
+        jGraph.setLayout(new BorderLayout());
         lienzo = new LienzoGrafo();
         jGraph.add(new JScrollPane(lienzo), BorderLayout.CENTER);
+        if (prefOriginal != null && prefOriginal.width > 50 && prefOriginal.height > 50) {
+            jGraph.setPreferredSize(prefOriginal);
+            jGraph.setMinimumSize(prefOriginal);
+        }
+        jGraph.revalidate();
 
-        ventanaDiagrama.setContentPane(jGraph);
-        ventanaDiagrama.pack();
         ventanaDiagrama.setLocationRelativeTo(null);
         lienzo.setMensaje("Escriba una expresión regular y pulse 'Diagrama' "
                 + "en la ventana principal.", false);
+    }
+
+    /**
+     * Devuelve el campo {@code jGraph} de la instancia de
+     * {@link Diagrama} indicada. Se usa reflexión porque NetBeans
+     * declara el campo como {@code private} dentro del bloque
+     * "Generated Code" que no debe modificarse a mano. Como ambas
+     * clases están en el mismo paquete y módulo, la reflexión es la
+     * forma más limpia de obtener el panel sin tocar
+     * {@link Diagrama}.
+     */
+    private static JPanel obtenerJGraph(Diagrama d) {
+        try {
+            java.lang.reflect.Field f = Diagrama.class.getDeclaredField("jGraph");
+            f.setAccessible(true);
+            Object v = f.get(d);
+            if (!(v instanceof JPanel)) {
+                throw new RuntimeException("Diagrama.jGraph no es un JPanel");
+            }
+            return (JPanel) v;
+        } catch (ReflectiveOperationException ex) {
+            throw new RuntimeException("No se pudo acceder a Diagrama.jGraph: "
+                    + ex.getMessage(), ex);
+        }
     }
 
     /** Refresca el contenido del lienzo a partir de {@code expresion}. */
