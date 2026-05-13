@@ -79,6 +79,14 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
         @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
 });
+
+        // La lista de transiciones depende únicamente de la expresión
+        // regular, por lo que se refresca tan pronto como ésta cambia.
+        tExpresion.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+        @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+        @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+        @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+});
     }
     
     
@@ -125,6 +133,7 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         jLabel2 = new javax.swing.JLabel();
         jLabel3 = new javax.swing.JLabel();
         bAnalizar = new javax.swing.JButton();
+        bDiagrama = new javax.swing.JButton();
         jScrollPane5 = new javax.swing.JScrollPane();
         tTrans = new javax.swing.JTextArea();
 
@@ -185,6 +194,13 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             }
         });
 
+        bDiagrama.setText("Diagrama");
+        bDiagrama.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                bDiagramaActionPerformed(evt);
+            }
+        });
+
         tTrans.setColumns(20);
         tTrans.setRows(5);
         jScrollPane5.setViewportView(tTrans);
@@ -212,7 +228,9 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                             .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, layout.createSequentialGroup()
                                 .addComponent(bAnalizar, javax.swing.GroupLayout.PREFERRED_SIZE, 136, javax.swing.GroupLayout.PREFERRED_SIZE)
                                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
-                                .addComponent(jLabel3, javax.swing.GroupLayout.PREFERRED_SIZE, 260, javax.swing.GroupLayout.PREFERRED_SIZE))
+                                .addComponent(bDiagrama, javax.swing.GroupLayout.PREFERRED_SIZE, 130, javax.swing.GroupLayout.PREFERRED_SIZE)
+                                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                                .addComponent(jLabel3, javax.swing.GroupLayout.PREFERRED_SIZE, 110, javax.swing.GroupLayout.PREFERRED_SIZE))
                             .addComponent(jScrollPane2, javax.swing.GroupLayout.Alignment.TRAILING, javax.swing.GroupLayout.PREFERRED_SIZE, 405, javax.swing.GroupLayout.PREFERRED_SIZE))))
                 .addContainerGap())
         );
@@ -232,7 +250,8 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                     .addGroup(layout.createSequentialGroup()
                         .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
                             .addComponent(jLabel3, javax.swing.GroupLayout.PREFERRED_SIZE, 22, javax.swing.GroupLayout.PREFERRED_SIZE)
-                            .addComponent(bAnalizar))
+                            .addComponent(bAnalizar)
+                            .addComponent(bDiagrama))
                         .addGap(18, 18, 18)
                         .addComponent(jScrollPane2))
                     .addComponent(jScrollPane5, javax.swing.GroupLayout.DEFAULT_SIZE, 208, Short.MAX_VALUE))
@@ -253,6 +272,14 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         ejecutarAnalisis();
     }//GEN-LAST:event_bAnalizarActionPerformed
 
+    private void bDiagramaActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_bDiagramaActionPerformed
+        // Mantenemos sincronizada la salida textual de transiciones (tTrans)
+        // con el diagrama, ejecutando primero el análisis y luego abriendo
+        // la ventana del diagrama con la expresión actual.
+        ejecutarAnalisis();
+        Transitions.mostrarDiagrama(tExpresion.getText());
+    }//GEN-LAST:event_bDiagramaActionPerformed
+
         // =================================================================
         //   EJECUCIÓN DEL ANÁLISIS (orquesta Thompson + simulación AFN)
         // =================================================================
@@ -272,11 +299,15 @@ public class Ventana_Thompson extends javax.swing.JFrame {
     private void ejecutarAnalisis() {
         tSalida.setText("");
         tError.setText("");
+        tTrans.setText("");
         DefaultTableModel modelo = (DefaultTableModel) tablaSimbolo.getModel();
         modelo.setRowCount(0);
 
         String expresion = tExpresion.getText();
         String entrada = tIngreso.getText();
+
+        // Listado de transiciones del AFN de Thompson (delegado a Transitions).
+        tTrans.setText(Transitions.generar(expresion));
 
         if (expresion == null || expresion.trim().isEmpty()) {
             tError.append("Error: la expresión regular está vacía.\n");
@@ -1390,6 +1421,7 @@ public class Ventana_Thompson extends javax.swing.JFrame {
 
     // Variables declaration - do not modify//GEN-BEGIN:variables
     private javax.swing.JButton bAnalizar;
+    private javax.swing.JButton bDiagrama;
     private javax.swing.JLabel jLabel1;
     private javax.swing.JLabel jLabel2;
     private javax.swing.JLabel jLabel3;
