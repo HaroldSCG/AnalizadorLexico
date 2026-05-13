@@ -308,7 +308,7 @@ public class Ventana_Thompson extends javax.swing.JFrame {
 
     } else {
 
-        Diagrama diagrama = new Diagrama();
+        Diagrama diagrama = new Diagrama(tTrans.getText());
 
         diagrama.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         diagrama.setLocationRelativeTo(null);

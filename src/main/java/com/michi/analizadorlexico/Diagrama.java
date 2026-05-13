@@ -14,7 +14,13 @@ public class Diagrama extends javax.swing.JFrame {
      * Creates new form Diagrama
      */
     public Diagrama() {
+        this("");
+    }
+
+    public Diagrama(String transiciones) {
         initComponents();
+        setTitle("Diagrama de Thompson");
+        Transitions.mostrarDiagrama(jGraph, transiciones);
     }
 
     /**
