@@ -277,7 +277,7 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         // con el diagrama, ejecutando primero el análisis y luego abriendo
         // la ventana del diagrama con la expresión actual.
         ejecutarAnalisis();
-        Diagrama.mostrar(tExpresion.getText());
+        Transitions.mostrarDiagrama(tExpresion.getText());
     }//GEN-LAST:event_bDiagramaActionPerformed
 
         // =================================================================
