@@ -7,6 +7,7 @@ package com.michi.analizadorlexico;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -15,33 +16,56 @@ import java.util.Set;
 import javax.swing.table.DefaultTableModel;
 
 /**
- * Ventana_Thompson
+ * Ventana_Thompson — Analizador léxico construido desde cero.
  *
- * Analizador léxico construido desde cero utilizando el algoritmo de
- * Thompson para convertir expresiones regulares en un AFN (Autómata Finito
- * No Determinista) y simularlo sobre la cadena de entrada para reconocer
- * tokens. NO se utilizan librerías externas (solo Swing para la interfaz y
- * estructuras estándar de Java).
+ * <p>El proceso completo está separado en tres capas independientes para
+ * mantener cada responsabilidad bien acotada:</p>
  *
- * Operaciones soportadas en la expresión regular:
- *   concatenación (implícita)   ej:  ab
- *   unión               |       ej:  a|b
- *   cerradura de Kleene *       ej:  a*
- *   una o más           +       ej:  a+
- *   opcional            ?       ej:  a?
- *   agrupación        ( )       ej:  (ab)+
- *   clase de caracteres [ ]     ej:  [a-zA-Z_]   [^0-9]
- *   escape              \       ej:  \+   \(   \\
+ * <ol>
+ *   <li><b>Construcción del AFN</b> ({@link ConstructorAFN_Thompson}): a
+ *       partir de una o varias expresiones regulares produce un AFN
+ *       aplicando el algoritmo de Thompson. Las construcciones son
+ *       no-destructivas en los puntos en que reutilizar un mismo fragmento
+ *       podría introducir efectos colaterales (operador {@code +}, que se
+ *       reduce a {@code A · A*} usando un clon profundo de A).</li>
+ *   <li><b>Simulación del AFN</b> ({@link SimuladorAFN}): implementa la
+ *       clausura-ε y la operación {@code move}, y entrega el lexema más
+ *       largo aceptado a partir de una posición junto con el tipo de
+ *       token asociado al estado de aceptación alcanzado.</li>
+ *   <li><b>Análisis léxico</b> ({@link AnalizadorLexico}): recorre la
+ *       cadena de entrada usando el simulador, agrupa los tokens por
+ *       máxima coincidencia, mantiene la posición (línea, columna), y
+ *       refina la clasificación cuando corresponde (palabras reservadas
+ *       son una refinación de identificadores).</li>
+ * </ol>
  *
- * Si se desea reconocer varios tipos de tokens, pueden encadenarse con la
- * unión, por ejemplo:
- *     [a-zA-Z_][a-zA-Z0-9_]*|[0-9]+|[+\-/=&lt;&gt;;,(){}]
+ * <p>El usuario puede ingresar:</p>
+ *
+ * <ul>
+ *   <li>Una sola expresión regular (modo automático con clasificación
+ *       heurística posterior: identificador / número / símbolo /
+ *       palabra reservada).</li>
+ *   <li>Varios patrones nombrados separados por {@code ;}, con sintaxis
+ *       {@code TIPO=regex}. En este caso el tipo del token sale
+ *       directamente del estado de aceptación del AFN que dispara la
+ *       coincidencia. Ejemplo recomendado:
+ *       <pre>
+ *  IDENTIFICADOR=[a-zA-Z_][a-zA-Z0-9_]*; NUMERO=[0-9]+; SIMBOLO=[+\-/=&lt;&gt;;,(){}]
+ *       </pre>
+ *   </li>
+ * </ul>
+ *
+ * <p>No se utilizan librerías externas: sólo {@code java.util} para
+ * estructuras y Swing para la GUI.</p>
  *
  * @author harol
  */
 public class Ventana_Thompson extends javax.swing.JFrame {
 
-    /** Palabras reservadas reconocidas por el analizador. */
+    /** Sentinel para tipos "auto-clasificados" cuando hay un único patrón sin etiqueta. */
+    private static final String TIPO_AUTO = "AUTO";
+
+    /** Palabras reservadas reconocidas como refinamiento de los identificadores. */
     private static final Set<String> PALABRAS_RESERVADAS = new HashSet<>();
     static {
         String[] reservadas = {
@@ -61,14 +85,10 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         }
     }
 
-    /**
-     * Creates new form Ventana_Thompson
-     */
     public Ventana_Thompson() {
         initComponents();
         inicializarTabla();
 
-        // Botón Analizar: ejecuta el análisis léxico con Thompson.
         bAnalizar.addActionListener(new java.awt.event.ActionListener() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent e) {
@@ -80,7 +100,6 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         setLocationRelativeTo(null);
     }
 
-    /** Configura el modelo de la tabla de símbolos con las columnas adecuadas. */
     private void inicializarTabla() {
         DefaultTableModel modelo = new DefaultTableModel(
                 new Object[][]{},
@@ -232,17 +251,9 @@ public class Ventana_Thompson extends javax.swing.JFrame {
     }//GEN-LAST:event_tIngresoActionPerformed
 
     // =================================================================
-    //   EJECUCIÓN DEL ANÁLISIS (orquesta Thompson + simulación AFN)
+    //   ORQUESTACIÓN GUI ↔ MOTOR
     // =================================================================
 
-    /**
-     * Punto de entrada disparado por el botón "Analizar".
-     * 1. Toma la expresión regular ingresada y construye el AFN con Thompson.
-     * 2. Toma la cadena de entrada y la recorre simulando el AFN para
-     *    obtener tokens por máxima coincidencia.
-     * 3. Clasifica los tokens, alimenta la tabla de símbolos y reporta
-     *    errores léxicos con su posición (línea, columna).
-     */
     private void ejecutarAnalisis() {
         tSalida.setText("");
         tError.setText("");
@@ -252,40 +263,54 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         String expresion = tExpresion.getText();
         String entrada = tIngreso.getText();
 
-        if (expresion == null || expresion.isEmpty()) {
+        if (expresion == null || expresion.trim().isEmpty()) {
             tError.append("Error: la expresión regular está vacía.\n");
             return;
         }
 
-        // Construcción del AFN con Thompson.
+        // 1) Parsear la cadena del usuario en una lista de patrones (1..N).
+        List<PatronRegex> patrones;
+        try {
+            patrones = parsearPatrones(expresion);
+            if (patrones.isEmpty()) {
+                tError.append("Error: la expresión regular está vacía.\n");
+                return;
+            }
+        } catch (RuntimeException ex) {
+            tError.append("Error al interpretar los patrones: " + ex.getMessage() + "\n");
+            return;
+        }
+
+        // 2) Construir el AFN maestro con Thompson.
         AFN afn;
         try {
-            ThompsonAFN constructor = new ThompsonAFN();
-            afn = constructor.construir(expresion);
+            ConstructorAFN_Thompson constructor = new ConstructorAFN_Thompson();
+            afn = constructor.construirMultiple(patrones);
         } catch (RuntimeException ex) {
             tError.append("Error en la expresión regular: " + ex.getMessage() + "\n");
             return;
         }
 
-        // Análisis léxico de la cadena.
-        AnalizadorLexicoThompson lexer = new AnalizadorLexicoThompson(afn);
+        // 3) Analizar la cadena de entrada con el simulador del AFN.
+        SimuladorAFN simulador = new SimuladorAFN(afn);
+        AnalizadorLexico lexer = new AnalizadorLexico(simulador);
         ResultadoAnalisis resultado = lexer.analizar(entrada == null ? "" : entrada);
 
-        // Volcar tokens.
+        // 4) Volcado de tokens.
         StringBuilder sbTokens = new StringBuilder();
         sbTokens.append("Tokens reconocidos (")
                 .append(resultado.tokens.size()).append("):\n");
         sbTokens.append("-----------------------------------------------------------\n");
-        sbTokens.append(String.format("%-20s %-20s %-8s %-8s%n",
+        sbTokens.append(String.format("%-20s %-22s %-8s %-8s%n",
                 "Lexema", "Tipo", "Línea", "Columna"));
         sbTokens.append("-----------------------------------------------------------\n");
         for (Token t : resultado.tokens) {
-            sbTokens.append(String.format("%-20s %-20s %-8d %-8d%n",
+            sbTokens.append(String.format("%-20s %-22s %-8d %-8d%n",
                     t.lexema, t.tipo, t.linea, t.columna));
         }
         tSalida.setText(sbTokens.toString());
 
-        // Volcar tabla de símbolos (sin duplicados, conserva orden de aparición).
+        // 5) Tabla de símbolos (sin duplicados por tipo + lexema; conserva primer hallazgo).
         Map<String, Boolean> agregados = new HashMap<>();
         for (Token t : resultado.tokens) {
             String clave = t.tipo + "::" + t.lexema;
@@ -295,7 +320,7 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             }
         }
 
-        // Volcar errores léxicos.
+        // 6) Errores léxicos.
         if (resultado.errores.isEmpty()) {
             tError.setText("Sin errores léxicos.\n");
         } else {
@@ -305,18 +330,13 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             for (ErrorLexico e : resultado.errores) {
                 sbErr.append("Línea ").append(e.linea)
                      .append(", Columna ").append(e.columna)
-                     .append(": carácter no válido '").append(e.lexema).append("'\n");
+                     .append(": secuencia no válida '").append(e.lexema).append("'\n");
             }
             tError.setText(sbErr.toString());
         }
     }
 
-    /**
-     * @param args the command line arguments
-     */
     public static void main(String args[]) {
-        /* Set the Nimbus look and feel */
-        //<editor-fold defaultstate="collapsed" desc=" Look and feel setting code (optional) ">
         try {
             for (javax.swing.UIManager.LookAndFeelInfo info : javax.swing.UIManager.getInstalledLookAndFeels()) {
                 if ("Nimbus".equals(info.getName())) {
@@ -324,17 +344,11 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                     break;
                 }
             }
-        } catch (ClassNotFoundException ex) {
-            java.util.logging.Logger.getLogger(Ventana_Thompson.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
-        } catch (InstantiationException ex) {
-            java.util.logging.Logger.getLogger(Ventana_Thompson.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
-        } catch (IllegalAccessException ex) {
-            java.util.logging.Logger.getLogger(Ventana_Thompson.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
-        } catch (javax.swing.UnsupportedLookAndFeelException ex) {
-            java.util.logging.Logger.getLogger(Ventana_Thompson.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+        } catch (ClassNotFoundException | InstantiationException | IllegalAccessException
+                 | javax.swing.UnsupportedLookAndFeelException ex) {
+            java.util.logging.Logger.getLogger(Ventana_Thompson.class.getName())
+                .log(java.util.logging.Level.SEVERE, null, ex);
         }
-        //</editor-fold>
-
         java.awt.EventQueue.invokeLater(new Runnable() {
             public void run() {
                 new Ventana_Thompson().setVisible(true);
@@ -343,29 +357,169 @@ public class Ventana_Thompson extends javax.swing.JFrame {
     }
 
     // =================================================================
-    //   ESTRUCTURAS DEL AFN (Estados, Transiciones, Autómata)
+    //   PARSEO DE LOS PATRONES DEL USUARIO
     // =================================================================
 
-    /** Estado del AFN. Cada estado tiene un id único y una lista de transiciones salientes. */
-    static class Estado {
-        int id;
-        List<Transicion> transiciones = new ArrayList<>();
+    /** Patrón "TIPO=regex" (o regex suelta con tipo AUTO). */
+    static class PatronRegex {
+        final String tipo;
+        final String regex;
 
-        Estado(int id) {
-            this.id = id;
+        PatronRegex(String tipo, String regex) {
+            this.tipo = tipo;
+            this.regex = regex;
         }
     }
 
     /**
-     * Transición del AFN.
-     *   - Si {@code epsilon == true}, es una transición vacía (ε).
-     *   - En caso contrario, {@code simbolos} contiene el conjunto de
-     *     caracteres aceptados por la transición (un solo carácter para
-     *     literales, varios para clases como [a-z]).
+     * Divide el texto del campo de expresión regular en patrones.
+     *
+     * <p>Hay dos modos:</p>
+     * <ul>
+     *   <li><b>Multi-patrón</b>: si el texto contiene al menos un
+     *       {@code =} a nivel superior (interpretado como
+     *       {@code TIPO=regex}), se considera entrada multi-patrón y se
+     *       divide por {@code ;} a nivel superior. Dentro de cada patrón
+     *       el {@code ;} literal debe escaparse como {@code \\;}.</li>
+     *   <li><b>Una sola regex</b>: si no hay {@code =} a nivel superior,
+     *       se toma todo el texto como una única expresión regular y los
+     *       {@code ;} se tratan como caracteres literales (mantiene
+     *       compatibilidad hacia atrás con regex como
+     *       {@code ...|;|...}).</li>
+     * </ul>
+     */
+    static List<PatronRegex> parsearPatrones(String texto) {
+        List<PatronRegex> result = new ArrayList<>();
+        if (texto == null) return result;
+        String trimmed = texto.trim();
+        if (trimmed.isEmpty()) return result;
+
+        // El modo multi-patrón sólo se activa si la entrada comienza con
+        // el formato 'NAME=...'. Así un '=' suelto dentro de la regex
+        // (por ejemplo `...|=|...` para reconocer el operador igual) no
+        // se confunde con la asignación de un tipo.
+        if (!comienzaConAsignacionDeTipo(trimmed)) {
+            result.add(new PatronRegex(TIPO_AUTO, trimmed));
+            return result;
+        }
+
+        List<String> partes = dividirTopLevel(trimmed, ';');
+        for (String p : partes) {
+            String parte = p.trim();
+            if (parte.isEmpty()) continue;
+            int eq = posicionIgualTopLevel(parte);
+            if (eq > 0) {
+                String tipo = parte.substring(0, eq).trim();
+                String regex = parte.substring(eq + 1).trim();
+                if (tipo.isEmpty()) {
+                    throw new RuntimeException("Falta el nombre de tipo antes de '=' en: '" + parte + "'");
+                }
+                if (regex.isEmpty()) {
+                    throw new RuntimeException("Falta la expresión regular después de '=' para el tipo '" + tipo + "'");
+                }
+                result.add(new PatronRegex(tipo.toUpperCase(java.util.Locale.ROOT), regex));
+            } else {
+                // Fragmento sin etiqueta dentro de un texto multi-patrón.
+                result.add(new PatronRegex(TIPO_AUTO, parte));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Devuelve {@code true} si {@code texto} comienza con
+     * {@code NAME=...}, donde {@code NAME} es un identificador
+     * ({@code [a-zA-Z_][a-zA-Z0-9_]*}). Sirve para activar el modo
+     * multi-patrón sin falsos positivos cuando hay {@code =} suelto
+     * dentro de la regex.
+     */
+    private static boolean comienzaConAsignacionDeTipo(String texto) {
+        int i = 0;
+        int n = texto.length();
+        if (i >= n) return false;
+        char c = texto.charAt(i);
+        if (!(Character.isLetter(c) || c == '_')) return false;
+        i++;
+        while (i < n) {
+            c = texto.charAt(i);
+            if (Character.isLetterOrDigit(c) || c == '_') { i++; continue; }
+            break;
+        }
+        while (i < n && (texto.charAt(i) == ' ' || texto.charAt(i) == '\t')) i++;
+        return i < n && texto.charAt(i) == '=';
+    }
+
+    /** Divide {@code s} por {@code sep} ignorando ocurrencias dentro de [...] o (...) y los escapes \\. */
+    private static List<String> dividirTopLevel(String s, char sep) {
+        List<String> partes = new ArrayList<>();
+        int parens = 0, brackets = 0;
+        int start = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' && i + 1 < s.length()) { i++; continue; }
+            if (c == '[') brackets++;
+            else if (c == ']' && brackets > 0) brackets--;
+            else if (brackets == 0 && c == '(') parens++;
+            else if (brackets == 0 && c == ')' && parens > 0) parens--;
+            else if (brackets == 0 && parens == 0 && c == sep) {
+                partes.add(s.substring(start, i));
+                start = i + 1;
+            }
+        }
+        partes.add(s.substring(start));
+        return partes;
+    }
+
+    /** Devuelve la posición del primer '=' que no esté dentro de [...] o (...). */
+    private static int posicionIgualTopLevel(String s) {
+        int parens = 0, brackets = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' && i + 1 < s.length()) { i++; continue; }
+            if (c == '[') brackets++;
+            else if (c == ']' && brackets > 0) brackets--;
+            else if (brackets == 0 && c == '(') parens++;
+            else if (brackets == 0 && c == ')' && parens > 0) parens--;
+            else if (brackets == 0 && parens == 0 && c == '=') return i;
+        }
+        return -1;
+    }
+
+    // =================================================================
+    //   CAPA 1 — ESTRUCTURAS DEL AFN
+    // =================================================================
+
+    /**
+     * Estado del AFN. Cada estado tiene id único, transiciones salientes
+     * y, opcionalmente, una etiqueta de tipo con su prioridad si es un
+     * estado de aceptación.
+     */
+    static class Estado {
+        int id;
+        List<Transicion> transiciones = new ArrayList<>();
+        /** Tipo de token al aceptar, o null si el estado no es aceptante. */
+        String etiquetaTipo;
+        /** Prioridad (menor = mayor preferencia) ante empate de longitud entre patrones. */
+        int prioridad;
+
+        Estado(int id) {
+            this.id = id;
+        }
+
+        boolean esAceptante() {
+            return etiquetaTipo != null;
+        }
+    }
+
+    /**
+     * Transición del AFN. Si {@code epsilon} es {@code true} no consume
+     * carácter. En caso contrario, {@code simbolos} es el conjunto de
+     * caracteres que activa la transición (un solo carácter para
+     * literales, varios para clases como {@code [a-z]}).
      */
     static class Transicion {
         boolean epsilon;
-        Set<Character> simbolos; // null si epsilon
+        Set<Character> simbolos;
         Estado destino;
 
         static Transicion eps(Estado destino) {
@@ -388,88 +542,110 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         }
     }
 
-    /** Fragmento de AFN con un estado inicial y uno de aceptación. */
+    /** Fragmento de AFN: estado inicial y final del fragmento que se está componiendo. */
     static class AFN {
         Estado inicio;
         Estado fin;
     }
 
     // =================================================================
-    //   CONSTRUCTOR DE AFN POR EL ALGORITMO DE THOMPSON
+    //   CAPA 1 — CONSTRUCCIÓN DEL AFN (Algoritmo de Thompson)
     // =================================================================
 
     /**
-     * Construye un AFN a partir de una expresión regular utilizando el
-     * algoritmo de Thompson.
+     * Constructor de AFN por el algoritmo de Thompson.
      *
-     * Fases:
-     *  1. Tokenizar la expresión (literales, clases [..], operadores).
-     *  2. Insertar el operador de concatenación explícito '·'.
-     *  3. Convertir a notación posfija usando el algoritmo Shunting-Yard.
-     *  4. Recorrer el posfijo y armar el AFN aplicando las construcciones
-     *     de Thompson (concatenación, unión, cerradura).
+     * <p>Fases:</p>
+     * <ol>
+     *   <li>{@link #tokenizar(String)}: convierte la regex en una lista de tokens.</li>
+     *   <li>{@link #validar(List)}: rechaza secuencias mal formadas.</li>
+     *   <li>{@link #insertarConcatenacion(List)}: añade el operador de concatenación explícito.</li>
+     *   <li>{@link #aPosfijo(List)}: Shunting-Yard para pasar a notación posfija.</li>
+     *   <li>{@link #desdePosfijo(List)}: aplica las construcciones de Thompson.</li>
+     * </ol>
+     *
+     * <p>Las construcciones individuales (concat, unión, kleene, opcional)
+     * consumen sus operandos del stack y no introducen aliasing
+     * problemático. El operador {@code A+} se reduce a {@code A · A*} con
+     * un <i>clon</i> profundo de {@code A} para evitar reutilizar la misma
+     * subestructura en ambos lados.</p>
      */
-    static class ThompsonAFN {
+    static class ConstructorAFN_Thompson {
 
         private int contadorEstados = 0;
 
-        /** Tipos de tokens del lexer de la expresión regular. */
         private enum TipoTok { SIMBOLO, LPAREN, RPAREN, UNION, CONCAT, ESTRELLA, MAS, PREG }
 
-        /** Token interno usado para construir el AFN. */
         private static class Tok {
-            TipoTok tipo;
-            Set<Character> simbolos; // solo si tipo == SIMBOLO
-            Tok(TipoTok tipo) { this.tipo = tipo; }
-            Tok(Set<Character> s) { this.tipo = TipoTok.SIMBOLO; this.simbolos = s; }
+            final TipoTok tipo;
+            final Set<Character> simbolos; // sólo si tipo == SIMBOLO
+            Tok(TipoTok tipo)              { this.tipo = tipo; this.simbolos = null; }
+            Tok(Set<Character> simbolos)   { this.tipo = TipoTok.SIMBOLO; this.simbolos = simbolos; }
         }
 
+        /** Construye el AFN para una sola expresión regular. */
         public AFN construir(String regex) {
             List<Tok> tokens = tokenizar(regex);
+            validar(tokens);
             tokens = insertarConcatenacion(tokens);
             List<Tok> posfijo = aPosfijo(tokens);
             return desdePosfijo(posfijo);
+        }
+
+        /**
+         * Construye un AFN maestro a partir de una lista de patrones.
+         * Cada subAFN conserva su estado de aceptación etiquetado con el
+         * tipo del patrón y una prioridad (menor índice = mayor preferencia).
+         * El AFN maestro tiene un único estado inicial nuevo con
+         * ε-transiciones hacia el inicio de cada subAFN.
+         */
+        public AFN construirMultiple(List<PatronRegex> patrones) {
+            if (patrones == null || patrones.isEmpty()) {
+                throw new RuntimeException("No se proporcionaron patrones");
+            }
+            AFN master = new AFN();
+            master.inicio = nuevoEstado();
+            master.fin = null; // los aceptantes son múltiples y se reconocen por etiquetaTipo
+
+            for (int i = 0; i < patrones.size(); i++) {
+                PatronRegex p = patrones.get(i);
+                AFN sub;
+                try {
+                    sub = construir(p.regex);
+                } catch (RuntimeException ex) {
+                    throw new RuntimeException("Patrón '" + p.tipo + "': " + ex.getMessage());
+                }
+                sub.fin.etiquetaTipo = p.tipo;
+                sub.fin.prioridad = i;
+                master.inicio.transiciones.add(Transicion.eps(sub.inicio));
+            }
+            return master;
         }
 
         private Estado nuevoEstado() {
             return new Estado(contadorEstados++);
         }
 
-        /** Convierte la expresión regular en una lista de tokens. */
+        // ----------------- 1) Tokenización -----------------
+
         private List<Tok> tokenizar(String regex) {
             List<Tok> salida = new ArrayList<>();
             int i = 0;
             while (i < regex.length()) {
                 char c = regex.charAt(i);
                 switch (c) {
-                    case '(':
-                        salida.add(new Tok(TipoTok.LPAREN));
-                        i++;
-                        break;
-                    case ')':
-                        salida.add(new Tok(TipoTok.RPAREN));
-                        i++;
-                        break;
-                    case '|':
-                        salida.add(new Tok(TipoTok.UNION));
-                        i++;
-                        break;
-                    case '*':
-                        salida.add(new Tok(TipoTok.ESTRELLA));
-                        i++;
-                        break;
-                    case '+':
-                        salida.add(new Tok(TipoTok.MAS));
-                        i++;
-                        break;
-                    case '?':
-                        salida.add(new Tok(TipoTok.PREG));
-                        i++;
-                        break;
+                    case '(': salida.add(new Tok(TipoTok.LPAREN));   i++; break;
+                    case ')': salida.add(new Tok(TipoTok.RPAREN));   i++; break;
+                    case '|': salida.add(new Tok(TipoTok.UNION));    i++; break;
+                    case '*': salida.add(new Tok(TipoTok.ESTRELLA)); i++; break;
+                    case '+': salida.add(new Tok(TipoTok.MAS));      i++; break;
+                    case '?': salida.add(new Tok(TipoTok.PREG));     i++; break;
+                    case ']':
+                        throw new RuntimeException("']' sin '[' correspondiente en la posición " + i);
                     case '[': {
-                        int cierre = regex.indexOf(']', i + 1);
+                        int cierre = encontrarCierreCorchete(regex, i);
                         if (cierre == -1) {
-                            throw new RuntimeException("Falta ']' que cierre la clase de caracteres en la posición " + i);
+                            throw new RuntimeException("Falta ']' que cierre la clase de caracteres iniciada en la posición " + i);
                         }
                         Set<Character> clase = parsearClase(regex.substring(i + 1, cierre));
                         salida.add(new Tok(clase));
@@ -480,21 +656,16 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                         if (i + 1 >= regex.length()) {
                             throw new RuntimeException("Escape '\\' al final de la expresión");
                         }
-                        char esc = regex.charAt(i + 1);
                         Set<Character> uno = new HashSet<>();
-                        uno.add(esc);
+                        uno.add(regex.charAt(i + 1));
                         salida.add(new Tok(uno));
                         i += 2;
                         break;
                     }
                     default: {
-                        // Carácter literal (se ignoran espacios para que la
-                        // expresión sea más legible). Para incluir un espacio
-                        // explícitamente, escapar con \.
-                        if (c == ' ' || c == '\t') {
-                            i++;
-                            break;
-                        }
+                        // Los espacios en la regex se ignoran para legibilidad;
+                        // usar \\ para incluir un espacio literal.
+                        if (c == ' ' || c == '\t') { i++; break; }
                         Set<Character> uno = new HashSet<>();
                         uno.add(c);
                         salida.add(new Tok(uno));
@@ -505,9 +676,22 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return salida;
         }
 
+        /** Devuelve el índice del ']' que cierra la clase iniciada en {@code abre}, respetando escapes. */
+        private int encontrarCierreCorchete(String s, int abre) {
+            int i = abre + 1;
+            // Permite ']' literal sólo si va escapado.
+            while (i < s.length()) {
+                char c = s.charAt(i);
+                if (c == '\\' && i + 1 < s.length()) { i += 2; continue; }
+                if (c == ']') return i;
+                i++;
+            }
+            return -1;
+        }
+
         /**
-         * Convierte el contenido de [...] en un conjunto de caracteres.
-         * Soporta rangos a-z y la negación con ^ al inicio.
+         * Convierte el contenido de {@code [...]} en un conjunto de caracteres.
+         * Soporta rangos {@code a-z} y la negación con {@code ^} al inicio.
          */
         private Set<Character> parsearClase(String contenido) {
             if (contenido.isEmpty()) {
@@ -518,6 +702,9 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             if (contenido.charAt(0) == '^') {
                 negada = true;
                 start = 1;
+                if (contenido.length() == 1) {
+                    throw new RuntimeException("Clase negada vacía '[^]'");
+                }
             }
             Set<Character> conjunto = new HashSet<>();
             int i = start;
@@ -528,11 +715,12 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                     i += 2;
                     continue;
                 }
-                if (i + 2 < contenido.length() && contenido.charAt(i + 1) == '-') {
+                if (i + 2 < contenido.length() && contenido.charAt(i + 1) == '-'
+                        && contenido.charAt(i + 2) != ']') {
                     char fin = contenido.charAt(i + 2);
                     char ini = c;
                     if (ini > fin) {
-                        throw new RuntimeException("Rango inválido en clase: " + ini + "-" + fin);
+                        throw new RuntimeException("Rango inválido en clase: '" + ini + "-" + fin + "'");
                     }
                     for (char x = ini; x <= fin; x++) {
                         conjunto.add(x);
@@ -545,18 +733,82 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             }
             if (negada) {
                 Set<Character> neg = new HashSet<>();
-                for (int ch = 32; ch < 127; ch++) { // ASCII imprimible
+                for (int ch = 32; ch < 127; ch++) {
                     char cc = (char) ch;
-                    if (!conjunto.contains(cc)) {
-                        neg.add(cc);
-                    }
+                    if (!conjunto.contains(cc)) neg.add(cc);
                 }
                 return neg;
             }
             return conjunto;
         }
 
-        /** Inserta el operador explícito de concatenación entre tokens consecutivos. */
+        // ----------------- 2) Validación sintáctica -----------------
+
+        private void validar(List<Tok> tokens) {
+            if (tokens.isEmpty()) {
+                throw new RuntimeException("Expresión regular vacía");
+            }
+            int parens = 0;
+            Tok prev = null;
+            for (int idx = 0; idx < tokens.size(); idx++) {
+                Tok t = tokens.get(idx);
+                boolean unario = t.tipo == TipoTok.ESTRELLA || t.tipo == TipoTok.MAS || t.tipo == TipoTok.PREG;
+                if (t.tipo == TipoTok.LPAREN) parens++;
+                if (t.tipo == TipoTok.RPAREN) {
+                    parens--;
+                    if (parens < 0) {
+                        throw new RuntimeException("Paréntesis ')' sin su pareja '(' (token #" + (idx + 1) + ")");
+                    }
+                }
+
+                if (prev == null) {
+                    if (unario || t.tipo == TipoTok.UNION) {
+                        throw new RuntimeException("La expresión no puede comenzar con '" + nombreOperador(t.tipo) + "'");
+                    }
+                    if (t.tipo == TipoTok.RPAREN) {
+                        throw new RuntimeException("La expresión no puede comenzar con ')'");
+                    }
+                } else {
+                    if (t.tipo == TipoTok.UNION
+                            && (prev.tipo == TipoTok.UNION || prev.tipo == TipoTok.LPAREN)) {
+                        throw new RuntimeException("Operador '|' sin operando izquierdo válido");
+                    }
+                    if (unario && (prev.tipo == TipoTok.UNION || prev.tipo == TipoTok.LPAREN)) {
+                        throw new RuntimeException("Operador '" + nombreOperador(t.tipo) + "' sin operando previo");
+                    }
+                    if (t.tipo == TipoTok.RPAREN) {
+                        if (prev.tipo == TipoTok.LPAREN) {
+                            throw new RuntimeException("Grupo vacío '()' no permitido");
+                        }
+                        if (prev.tipo == TipoTok.UNION) {
+                            throw new RuntimeException("Operador '|' sin operando derecho antes de ')'");
+                        }
+                    }
+                }
+                prev = t;
+            }
+            if (parens != 0) {
+                throw new RuntimeException("Paréntesis '(' sin cierre (faltan " + parens + " ')')");
+            }
+            if (prev != null && prev.tipo == TipoTok.UNION) {
+                throw new RuntimeException("Operador '|' sin operando derecho al final");
+            }
+        }
+
+        private String nombreOperador(TipoTok t) {
+            switch (t) {
+                case UNION:    return "|";
+                case ESTRELLA: return "*";
+                case MAS:      return "+";
+                case PREG:     return "?";
+                case LPAREN:   return "(";
+                case RPAREN:   return ")";
+                default:       return t.name();
+            }
+        }
+
+        // ----------------- 3) Concatenación explícita -----------------
+
         private List<Tok> insertarConcatenacion(List<Tok> entrada) {
             List<Tok> salida = new ArrayList<>();
             for (int i = 0; i < entrada.size(); i++) {
@@ -578,19 +830,19 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return salida;
         }
 
-        /** Devuelve la precedencia de un operador (Shunting-Yard). */
+        // ----------------- 4) Shunting-Yard a posfijo -----------------
+
         private int precedencia(TipoTok t) {
             switch (t) {
-                case UNION: return 1;
-                case CONCAT: return 2;
+                case UNION:    return 1;
+                case CONCAT:   return 2;
                 case ESTRELLA:
                 case MAS:
-                case PREG: return 3;
-                default: return 0;
+                case PREG:     return 3;
+                default:       return 0;
             }
         }
 
-        /** Convierte la lista de tokens infija a posfija (RPN). */
         private List<Tok> aPosfijo(List<Tok> tokens) {
             List<Tok> salida = new ArrayList<>();
             List<Tok> pila = new ArrayList<>();
@@ -613,10 +865,11 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                             salida.add(top);
                         }
                         if (!encontrado) {
+                            // Ya cubierto por validar(), defensa adicional.
                             throw new RuntimeException("Paréntesis ')' sin su pareja '('");
                         }
                         break;
-                    default: // operador
+                    default:
                         while (!pila.isEmpty()) {
                             Tok top = pila.get(pila.size() - 1);
                             if (top.tipo == TipoTok.LPAREN) break;
@@ -639,7 +892,8 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return salida;
         }
 
-        /** Construye el AFN siguiendo el algoritmo de Thompson sobre el posfijo. */
+        // ----------------- 5) Posfijo -> AFN (Thompson) -----------------
+
         private AFN desdePosfijo(List<Tok> posfijo) {
             List<AFN> pila = new ArrayList<>();
             for (Tok tk : posfijo) {
@@ -648,35 +902,42 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                         pila.add(afnSimbolo(tk.simbolos));
                         break;
                     case CONCAT: {
-                        if (pila.size() < 2) throw new RuntimeException("Expresión regular mal formada (concatenación)");
+                        if (pila.size() < 2) {
+                            throw new RuntimeException("Expresión regular mal formada (concatenación sin operandos)");
+                        }
                         AFN b = pila.remove(pila.size() - 1);
                         AFN a = pila.remove(pila.size() - 1);
                         pila.add(concatenar(a, b));
                         break;
                     }
                     case UNION: {
-                        if (pila.size() < 2) throw new RuntimeException("Expresión regular mal formada (unión)");
+                        if (pila.size() < 2) {
+                            throw new RuntimeException("Expresión regular mal formada (unión sin operandos)");
+                        }
                         AFN b = pila.remove(pila.size() - 1);
                         AFN a = pila.remove(pila.size() - 1);
                         pila.add(union(a, b));
                         break;
                     }
                     case ESTRELLA: {
-                        if (pila.isEmpty()) throw new RuntimeException("Expresión regular mal formada (*)");
-                        AFN a = pila.remove(pila.size() - 1);
-                        pila.add(kleene(a));
+                        if (pila.isEmpty()) {
+                            throw new RuntimeException("Expresión regular mal formada (* sin operando)");
+                        }
+                        pila.add(kleene(pila.remove(pila.size() - 1)));
                         break;
                     }
                     case MAS: {
-                        if (pila.isEmpty()) throw new RuntimeException("Expresión regular mal formada (+)");
-                        AFN a = pila.remove(pila.size() - 1);
-                        pila.add(masUno(a));
+                        if (pila.isEmpty()) {
+                            throw new RuntimeException("Expresión regular mal formada (+ sin operando)");
+                        }
+                        pila.add(masUno(pila.remove(pila.size() - 1)));
                         break;
                     }
                     case PREG: {
-                        if (pila.isEmpty()) throw new RuntimeException("Expresión regular mal formada (?)");
-                        AFN a = pila.remove(pila.size() - 1);
-                        pila.add(opcional(a));
+                        if (pila.isEmpty()) {
+                            throw new RuntimeException("Expresión regular mal formada (? sin operando)");
+                        }
+                        pila.add(opcional(pila.remove(pila.size() - 1)));
                         break;
                     }
                     default:
@@ -689,9 +950,8 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return pila.get(0);
         }
 
-        // ----------- Construcciones de Thompson -----------
+        // ----------------- Construcciones de Thompson -----------------
 
-        /** AFN para un símbolo o clase de caracteres: i --c--> f */
         private AFN afnSimbolo(Set<Character> simbolos) {
             AFN a = new AFN();
             a.inicio = nuevoEstado();
@@ -700,7 +960,6 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return a;
         }
 
-        /** Concatenación A·B : conecta fin(A) ---ε---> inicio(B). */
         private AFN concatenar(AFN a, AFN b) {
             a.fin.transiciones.add(Transicion.eps(b.inicio));
             AFN res = new AFN();
@@ -709,7 +968,6 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return res;
         }
 
-        /** Unión A|B : nuevo inicio con ε hacia inicio(A) e inicio(B); fin(A) y fin(B) con ε al nuevo fin. */
         private AFN union(AFN a, AFN b) {
             AFN res = new AFN();
             res.inicio = nuevoEstado();
@@ -721,7 +979,6 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return res;
         }
 
-        /** Cerradura de Kleene A* : nuevo inicio→inicio(A), nuevo inicio→nuevo fin, fin(A)→inicio(A), fin(A)→nuevo fin. */
         private AFN kleene(AFN a) {
             AFN res = new AFN();
             res.inicio = nuevoEstado();
@@ -733,20 +990,18 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return res;
         }
 
-        /** A+ = A · A* (equivalente). */
+        /**
+         * {@code A+} se construye como {@code A · A*} usando un clon
+         * profundo de A para no mutar la misma subestructura dos veces
+         * con back-edges incompatibles. Así se evita cualquier
+         * efecto colateral por aliasing.
+         */
         private AFN masUno(AFN a) {
-            // Reusamos el patrón A · A* pero clonando estructura para no afectar a.
-            // Forma equivalente compacta:
-            AFN res = new AFN();
-            res.inicio = nuevoEstado();
-            res.fin = nuevoEstado();
-            res.inicio.transiciones.add(Transicion.eps(a.inicio));
-            a.fin.transiciones.add(Transicion.eps(a.inicio));
-            a.fin.transiciones.add(Transicion.eps(res.fin));
-            return res;
+            AFN copia = clonar(a);
+            AFN estrellaDeCopia = kleene(copia);
+            return concatenar(a, estrellaDeCopia);
         }
 
-        /** A? : nuevo inicio→inicio(A), nuevo inicio→nuevo fin, fin(A)→nuevo fin. */
         private AFN opcional(AFN a) {
             AFN res = new AFN();
             res.inicio = nuevoEstado();
@@ -756,125 +1011,107 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             a.fin.transiciones.add(Transicion.eps(res.fin));
             return res;
         }
+
+        /**
+         * Clon profundo de un fragmento AFN: crea estados nuevos con ids
+         * propios y reconstruye todas las transiciones reachable desde
+         * {@code original.inicio}. {@code original.fin} se incluye
+         * explícitamente aunque, en fragmentos bien formados de Thompson,
+         * siempre es alcanzable.
+         */
+        private AFN clonar(AFN original) {
+            Map<Estado, Estado> mapa = new IdentityHashMap<>();
+            List<Estado> pila = new ArrayList<>();
+
+            Estado nuevoInicio = nuevoEstado();
+            nuevoInicio.etiquetaTipo = original.inicio.etiquetaTipo;
+            nuevoInicio.prioridad = original.inicio.prioridad;
+            mapa.put(original.inicio, nuevoInicio);
+            pila.add(original.inicio);
+
+            // Aseguramos que el fin esté mapeado aunque no sea alcanzable.
+            if (!mapa.containsKey(original.fin)) {
+                Estado clonFin = nuevoEstado();
+                clonFin.etiquetaTipo = original.fin.etiquetaTipo;
+                clonFin.prioridad = original.fin.prioridad;
+                mapa.put(original.fin, clonFin);
+                pila.add(original.fin);
+            }
+
+            while (!pila.isEmpty()) {
+                Estado actual = pila.remove(pila.size() - 1);
+                Estado copia = mapa.get(actual);
+                for (Transicion t : actual.transiciones) {
+                    Estado destOrig = t.destino;
+                    Estado destCopia = mapa.get(destOrig);
+                    if (destCopia == null) {
+                        destCopia = nuevoEstado();
+                        destCopia.etiquetaTipo = destOrig.etiquetaTipo;
+                        destCopia.prioridad = destOrig.prioridad;
+                        mapa.put(destOrig, destCopia);
+                        pila.add(destOrig);
+                    }
+                    if (t.epsilon) {
+                        copia.transiciones.add(Transicion.eps(destCopia));
+                    } else {
+                        // Compartir la referencia al Set es seguro porque el
+                        // conjunto de símbolos es inmutable después de la
+                        // tokenización; aun así clonamos para máxima seguridad.
+                        copia.transiciones.add(Transicion.simbolo(new HashSet<>(t.simbolos), destCopia));
+                    }
+                }
+            }
+
+            AFN copia = new AFN();
+            copia.inicio = mapa.get(original.inicio);
+            copia.fin = mapa.get(original.fin);
+            return copia;
+        }
     }
 
     // =================================================================
-    //   SIMULACIÓN DEL AFN Y ANÁLISIS LÉXICO
+    //   CAPA 2 — SIMULACIÓN DEL AFN
     // =================================================================
 
-    /** Token reconocido por el analizador. */
-    static class Token {
-        String lexema;
-        String tipo;
-        String valor;
-        int linea;
-        int columna;
+    /** Resultado de una operación de máxima coincidencia. */
+    static class MatchResult {
+        final int longitud;
+        final String tipo;
 
-        Token(String lexema, String tipo, String valor, int linea, int columna) {
-            this.lexema = lexema;
+        MatchResult(int longitud, String tipo) {
+            this.longitud = longitud;
             this.tipo = tipo;
-            this.valor = valor;
-            this.linea = linea;
-            this.columna = columna;
         }
-    }
 
-    /** Error léxico detectado. */
-    static class ErrorLexico {
-        String lexema;
-        int linea;
-        int columna;
-
-        ErrorLexico(String lexema, int linea, int columna) {
-            this.lexema = lexema;
-            this.linea = linea;
-            this.columna = columna;
+        static MatchResult sinMatch() {
+            return new MatchResult(0, null);
         }
-    }
-
-    /** Resultado del análisis: tokens y errores. */
-    static class ResultadoAnalisis {
-        List<Token> tokens = new ArrayList<>();
-        List<ErrorLexico> errores = new ArrayList<>();
     }
 
     /**
-     * Recorre la cadena de entrada y, en cada posición, intenta consumir
-     * el lexema más largo aceptado por el AFN (máxima coincidencia).
+     * Simulador puro del AFN. Implementa la clausura-ε, el move por
+     * símbolo y la búsqueda de máxima coincidencia desde un offset dado.
+     * Es completamente independiente del léxico, no conoce nada de
+     * tokens ni del flujo de la GUI.
      */
-    static class AnalizadorLexicoThompson {
+    static class SimuladorAFN {
 
         private final AFN afn;
 
-        AnalizadorLexicoThompson(AFN afn) {
+        SimuladorAFN(AFN afn) {
             this.afn = afn;
         }
 
-        ResultadoAnalisis analizar(String entrada) {
-            ResultadoAnalisis resultado = new ResultadoAnalisis();
-            int i = 0;
-            int linea = 1;
-            int columna = 1;
-            int n = entrada.length();
-
-            while (i < n) {
-                char c = entrada.charAt(i);
-
-                // Saltar espacios en blanco / saltos de línea (no son tokens).
-                if (c == ' ' || c == '\t') {
-                    i++;
-                    columna++;
-                    continue;
-                }
-                if (c == '\n') {
-                    i++;
-                    linea++;
-                    columna = 1;
-                    continue;
-                }
-                if (c == '\r') {
-                    i++;
-                    continue;
-                }
-
-                int inicioLinea = linea;
-                int inicioColumna = columna;
-
-                int longitudMatch = obtenerLongitudMatchMasLargo(entrada, i);
-
-                if (longitudMatch > 0) {
-                    String lexema = entrada.substring(i, i + longitudMatch);
-                    String tipo = clasificar(lexema);
-                    String valor = lexema;
-                    resultado.tokens.add(new Token(lexema, tipo, valor, inicioLinea, inicioColumna));
-                    // Avanzar respetando posibles saltos de línea dentro del lexema.
-                    for (int k = 0; k < longitudMatch; k++) {
-                        char cc = entrada.charAt(i + k);
-                        if (cc == '\n') {
-                            linea++;
-                            columna = 1;
-                        } else {
-                            columna++;
-                        }
-                    }
-                    i += longitudMatch;
-                } else {
-                    // No hay coincidencia: error léxico de un carácter.
-                    resultado.errores.add(new ErrorLexico(String.valueOf(c), inicioLinea, inicioColumna));
-                    i++;
-                    columna++;
-                }
-            }
-            return resultado;
-        }
-
         /**
-         * Simula el AFN sobre {@code entrada} a partir de {@code desde} y
-         * devuelve la longitud del lexema más largo aceptado (0 si no hay).
+         * Devuelve la longitud del lexema más largo aceptado por el AFN
+         * a partir de {@code desde}, junto con el tipo del estado de
+         * aceptación elegido. Si no hay coincidencia, longitud = 0 y
+         * tipo = null.
          */
-        private int obtenerLongitudMatchMasLargo(String entrada, int desde) {
+        MatchResult obtenerMatchMasLargo(String entrada, int desde) {
             Set<Estado> actuales = clausuraEpsilon(unicoConjunto(afn.inicio));
-            int mejorLongitud = contieneEstadoFinal(actuales) ? 0 : -1;
+            String mejorTipo = tipoAceptante(actuales);
+            int mejorLongitud = mejorTipo != null ? 0 : -1;
             int longitud = 0;
 
             while (desde + longitud < entrada.length() && !actuales.isEmpty()) {
@@ -883,11 +1120,15 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                 if (siguiente.isEmpty()) break;
                 actuales = clausuraEpsilon(siguiente);
                 longitud++;
-                if (contieneEstadoFinal(actuales)) {
+                String tipo = tipoAceptante(actuales);
+                if (tipo != null) {
                     mejorLongitud = longitud;
+                    mejorTipo = tipo;
                 }
             }
-            return Math.max(mejorLongitud, 0);
+
+            if (mejorLongitud <= 0) return MatchResult.sinMatch();
+            return new MatchResult(mejorLongitud, mejorTipo);
         }
 
         private Set<Estado> unicoConjunto(Estado e) {
@@ -896,7 +1137,6 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return s;
         }
 
-        /** Calcula la clausura-ε de un conjunto de estados. */
         private Set<Estado> clausuraEpsilon(Set<Estado> estados) {
             Set<Estado> cierre = new LinkedHashSet<>(estados);
             List<Estado> pila = new ArrayList<>(estados);
@@ -912,44 +1152,186 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             return cierre;
         }
 
-        /** Devuelve el conjunto de estados alcanzados al consumir 'c'. */
         private Set<Estado> mover(Set<Estado> estados, char c) {
             Set<Estado> destino = new LinkedHashSet<>();
             for (Estado e : estados) {
                 for (Transicion t : e.transiciones) {
-                    if (t.acepta(c)) {
-                        destino.add(t.destino);
-                    }
+                    if (t.acepta(c)) destino.add(t.destino);
                 }
             }
             return destino;
         }
 
-        private boolean contieneEstadoFinal(Set<Estado> estados) {
+        /**
+         * Si el conjunto contiene algún estado de aceptación, devuelve el
+         * tipo asociado al estado con menor {@code prioridad} (mayor
+         * preferencia). En caso contrario, devuelve null.
+         */
+        private String tipoAceptante(Set<Estado> estados) {
+            Estado mejor = null;
             for (Estado e : estados) {
-                if (e == afn.fin) return true;
+                if (!e.esAceptante()) continue;
+                if (mejor == null || e.prioridad < mejor.prioridad) {
+                    mejor = e;
+                }
             }
-            return false;
+            return mejor == null ? null : mejor.etiquetaTipo;
+        }
+    }
+
+    // =================================================================
+    //   CAPA 3 — ANÁLISIS LÉXICO
+    // =================================================================
+
+    static class Token {
+        final String lexema;
+        final String tipo;
+        final String valor;
+        final int linea;
+        final int columna;
+
+        Token(String lexema, String tipo, String valor, int linea, int columna) {
+            this.lexema = lexema;
+            this.tipo = tipo;
+            this.valor = valor;
+            this.linea = linea;
+            this.columna = columna;
+        }
+    }
+
+    static class ErrorLexico {
+        final String lexema;
+        final int linea;
+        final int columna;
+
+        ErrorLexico(String lexema, int linea, int columna) {
+            this.lexema = lexema;
+            this.linea = linea;
+            this.columna = columna;
+        }
+    }
+
+    static class ResultadoAnalisis {
+        final List<Token> tokens = new ArrayList<>();
+        final List<ErrorLexico> errores = new ArrayList<>();
+    }
+
+    /**
+     * Analizador léxico. Usa el simulador para extraer tokens por máxima
+     * coincidencia, gestiona la posición (línea/columna), agrupa
+     * caracteres no reconocidos consecutivos en un único error, y aplica
+     * el refinamiento de palabras reservadas sobre identificadores.
+     */
+    static class AnalizadorLexico {
+
+        private final SimuladorAFN simulador;
+
+        AnalizadorLexico(SimuladorAFN simulador) {
+            this.simulador = simulador;
+        }
+
+        ResultadoAnalisis analizar(String entrada) {
+            ResultadoAnalisis resultado = new ResultadoAnalisis();
+            int i = 0;
+            int linea = 1;
+            int columna = 1;
+            int n = entrada.length();
+
+            // Buffer para agrupar caracteres erróneos consecutivos.
+            StringBuilder bufErr = null;
+            int errLinea = 0;
+            int errColumna = 0;
+
+            while (i < n) {
+                char c = entrada.charAt(i);
+
+                // Saltar espacios y saltos de línea (no son tokens).
+                if (c == ' ' || c == '\t') {
+                    resultado.errores.addAll(volcarError(bufErr, errLinea, errColumna));
+                    bufErr = null;
+                    i++; columna++;
+                    continue;
+                }
+                if (c == '\n') {
+                    resultado.errores.addAll(volcarError(bufErr, errLinea, errColumna));
+                    bufErr = null;
+                    i++; linea++; columna = 1;
+                    continue;
+                }
+                if (c == '\r') {
+                    i++;
+                    continue;
+                }
+
+                int inicioLinea = linea;
+                int inicioColumna = columna;
+
+                MatchResult m = simulador.obtenerMatchMasLargo(entrada, i);
+
+                if (m.longitud > 0) {
+                    resultado.errores.addAll(volcarError(bufErr, errLinea, errColumna));
+                    bufErr = null;
+
+                    String lexema = entrada.substring(i, i + m.longitud);
+                    String tipo = refinarTipo(m.tipo, lexema);
+                    String valor = lexema;
+                    resultado.tokens.add(new Token(lexema, tipo, valor, inicioLinea, inicioColumna));
+
+                    for (int k = 0; k < m.longitud; k++) {
+                        char cc = entrada.charAt(i + k);
+                        if (cc == '\n') { linea++; columna = 1; }
+                        else            { columna++; }
+                    }
+                    i += m.longitud;
+                } else {
+                    // Carácter no reconocido: agrupar con errores adyacentes
+                    // para reportar mejor las "secuencias no reconocidas".
+                    if (bufErr == null) {
+                        bufErr = new StringBuilder();
+                        errLinea = inicioLinea;
+                        errColumna = inicioColumna;
+                    }
+                    bufErr.append(c);
+                    i++; columna++;
+                }
+            }
+            resultado.errores.addAll(volcarError(bufErr, errLinea, errColumna));
+            return resultado;
+        }
+
+        private List<ErrorLexico> volcarError(StringBuilder buf, int linea, int columna) {
+            List<ErrorLexico> out = new ArrayList<>();
+            if (buf != null && buf.length() > 0) {
+                out.add(new ErrorLexico(buf.toString(), linea, columna));
+            }
+            return out;
         }
 
         /**
-         * Clasifica un lexema en una de las categorías léxicas pedidas:
-         *   - Palabra Reservada
-         *   - Identificador
-         *   - Número
-         *   - Símbolo
+         * Refina el tipo entregado por el AFN según el lexema concreto:
+         * <ul>
+         *   <li>Si el tipo es {@code AUTO} (modo de regex única sin
+         *       etiquetar), se aplica la heurística:
+         *       reservada → identificador → número → símbolo.</li>
+         *   <li>Si el tipo es {@code IDENTIFICADOR} pero el lexema está
+         *       en la tabla de palabras reservadas, se reclasifica como
+         *       {@code PALABRA_RESERVADA} (refinamiento estándar
+         *       reservada/identificador).</li>
+         *   <li>En otro caso, se respeta el tipo del AFN tal cual.</li>
+         * </ul>
          */
-        private String clasificar(String lexema) {
-            if (PALABRAS_RESERVADAS.contains(lexema)) {
+        private String refinarTipo(String tipoAfn, String lexema) {
+            if (tipoAfn == null) return "Símbolo";
+            if (TIPO_AUTO.equals(tipoAfn)) {
+                if (PALABRAS_RESERVADAS.contains(lexema)) return "Palabra Reservada";
+                if (esIdentificador(lexema))             return "Identificador";
+                if (esNumero(lexema))                    return "Número";
+                return "Símbolo";
+            }
+            if ("IDENTIFICADOR".equalsIgnoreCase(tipoAfn) && PALABRAS_RESERVADAS.contains(lexema)) {
                 return "Palabra Reservada";
             }
-            if (esIdentificador(lexema)) {
-                return "Identificador";
-            }
-            if (esNumero(lexema)) {
-                return "Número";
-            }
-            return "Símbolo";
+            return tipoAfn;
         }
 
         private boolean esIdentificador(String s) {
