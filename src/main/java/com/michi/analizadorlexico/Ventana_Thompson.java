@@ -7,11 +7,14 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import javax.swing.JFrame;
+import javax.swing.JOptionPane;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 
 import javax.swing.table.DefaultTableModel;
 
 /**
- * 
  *  * Ventana_Thompson
  *
  * Analizador léxico construido desde cero utilizando el algoritmo de
@@ -70,8 +73,11 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         inicializarTabla();
         setTitle("Analizador Léxico - Algoritmo de Thompson");
         setLocationRelativeTo(null);
+        tTrans.setEditable(false);
+        tSalida.setEditable(false);
+        tError.setEditable(false);
         
-        setSize(965,550);
+        setSize(965,590);
         setResizable(false);
         
         tIngreso.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
@@ -79,7 +85,25 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
         @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
 });
+        
+        // La lista de transiciones depende únicamente de la expresión
+        // regular, por lo que se refresca tan pronto como ésta cambia.
+        tExpresion.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+        @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+        @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+        @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+});
+                // La lista de transiciones depende únicamente de la expresión
+        // regular, por lo que se refresca tan pronto como ésta cambia.
+        tExpresion.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+        @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+        @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+        @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { ejecutarAnalisis(); }
+});
+        
+        
     }
+    
     
     
     
@@ -127,6 +151,8 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         bAnalizar = new javax.swing.JButton();
         jScrollPane5 = new javax.swing.JScrollPane();
         tTrans = new javax.swing.JTextArea();
+        jLabel4 = new javax.swing.JLabel();
+        bDiagrama = new javax.swing.JButton();
 
         setDefaultCloseOperation(javax.swing.WindowConstants.EXIT_ON_CLOSE);
         setPreferredSize(new java.awt.Dimension(936, 600));
@@ -156,8 +182,8 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             jPanel1Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
             .addGroup(jPanel1Layout.createSequentialGroup()
                 .addContainerGap()
-                .addComponent(jScrollPane4, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
-                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, 70, Short.MAX_VALUE)
+                .addComponent(jScrollPane4, javax.swing.GroupLayout.DEFAULT_SIZE, 510, Short.MAX_VALUE)
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
                 .addComponent(jScrollPane3, javax.swing.GroupLayout.PREFERRED_SIZE, 400, javax.swing.GroupLayout.PREFERRED_SIZE)
                 .addContainerGap())
         );
@@ -189,6 +215,16 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         tTrans.setRows(5);
         jScrollPane5.setViewportView(tTrans);
 
+        jLabel4.setHorizontalAlignment(javax.swing.SwingConstants.RIGHT);
+        jLabel4.setText("Graficar algoritmo de Thomson:");
+
+        bDiagrama.setText("Diagrama");
+        bDiagrama.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                bDiagramaActionPerformed(evt);
+            }
+        });
+
         javax.swing.GroupLayout layout = new javax.swing.GroupLayout(getContentPane());
         getContentPane().setLayout(layout);
         layout.setHorizontalGroup(
@@ -200,20 +236,26 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                         .addComponent(jPanel1, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
                         .addGap(0, 3, Short.MAX_VALUE))
                     .addGroup(layout.createSequentialGroup()
-                        .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING)
-                            .addComponent(jLabel1, javax.swing.GroupLayout.Alignment.LEADING, javax.swing.GroupLayout.PREFERRED_SIZE, 400, javax.swing.GroupLayout.PREFERRED_SIZE)
-                            .addComponent(tExpresion, javax.swing.GroupLayout.Alignment.LEADING, javax.swing.GroupLayout.PREFERRED_SIZE, 458, javax.swing.GroupLayout.PREFERRED_SIZE)
-                            .addComponent(jScrollPane5, javax.swing.GroupLayout.Alignment.LEADING))
-                        .addGap(18, 18, 18)
                         .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                            .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING, false)
-                                .addComponent(jLabel2, javax.swing.GroupLayout.DEFAULT_SIZE, 400, Short.MAX_VALUE)
-                                .addComponent(tIngreso))
+                            .addComponent(tExpresion)
+                            .addGroup(layout.createSequentialGroup()
+                                .addComponent(jLabel1, javax.swing.GroupLayout.PREFERRED_SIZE, 400, javax.swing.GroupLayout.PREFERRED_SIZE)
+                                .addGap(0, 0, Short.MAX_VALUE))
                             .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, layout.createSequentialGroup()
+                                .addGap(0, 0, Short.MAX_VALUE)
+                                .addComponent(jLabel4, javax.swing.GroupLayout.PREFERRED_SIZE, 232, javax.swing.GroupLayout.PREFERRED_SIZE)
+                                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
+                                .addComponent(bDiagrama, javax.swing.GroupLayout.PREFERRED_SIZE, 136, javax.swing.GroupLayout.PREFERRED_SIZE))
+                            .addComponent(jScrollPane5))
+                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
+                        .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING, false)
+                            .addComponent(jLabel2, javax.swing.GroupLayout.PREFERRED_SIZE, 400, javax.swing.GroupLayout.PREFERRED_SIZE)
+                            .addGroup(layout.createSequentialGroup()
                                 .addComponent(bAnalizar, javax.swing.GroupLayout.PREFERRED_SIZE, 136, javax.swing.GroupLayout.PREFERRED_SIZE)
                                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
                                 .addComponent(jLabel3, javax.swing.GroupLayout.PREFERRED_SIZE, 260, javax.swing.GroupLayout.PREFERRED_SIZE))
-                            .addComponent(jScrollPane2, javax.swing.GroupLayout.Alignment.TRAILING, javax.swing.GroupLayout.PREFERRED_SIZE, 405, javax.swing.GroupLayout.PREFERRED_SIZE))))
+                            .addComponent(jScrollPane2, javax.swing.GroupLayout.DEFAULT_SIZE, 405, Short.MAX_VALUE)
+                            .addComponent(tIngreso))))
                 .addContainerGap())
         );
         layout.setVerticalGroup(
@@ -227,15 +269,16 @@ public class Ventana_Thompson extends javax.swing.JFrame {
                 .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
                     .addComponent(tExpresion, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(tIngreso, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE))
-                .addGap(16, 16, 16)
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, 29, Short.MAX_VALUE)
                 .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-                    .addGroup(layout.createSequentialGroup()
-                        .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
-                            .addComponent(jLabel3, javax.swing.GroupLayout.PREFERRED_SIZE, 22, javax.swing.GroupLayout.PREFERRED_SIZE)
-                            .addComponent(bAnalizar))
-                        .addGap(18, 18, 18)
-                        .addComponent(jScrollPane2))
-                    .addComponent(jScrollPane5, javax.swing.GroupLayout.DEFAULT_SIZE, 208, Short.MAX_VALUE))
+                    .addComponent(jScrollPane2, javax.swing.GroupLayout.Alignment.TRAILING, javax.swing.GroupLayout.PREFERRED_SIZE, 75, javax.swing.GroupLayout.PREFERRED_SIZE)
+                    .addComponent(jScrollPane5, javax.swing.GroupLayout.Alignment.TRAILING, javax.swing.GroupLayout.PREFERRED_SIZE, 168, javax.swing.GroupLayout.PREFERRED_SIZE))
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                    .addComponent(jLabel3, javax.swing.GroupLayout.PREFERRED_SIZE, 22, javax.swing.GroupLayout.PREFERRED_SIZE)
+                    .addComponent(bAnalizar)
+                    .addComponent(bDiagrama)
+                    .addComponent(jLabel4))
                 .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
                 .addComponent(jPanel1, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
                 .addContainerGap())
@@ -252,6 +295,36 @@ public class Ventana_Thompson extends javax.swing.JFrame {
     private void bAnalizarActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_bAnalizarActionPerformed
         ejecutarAnalisis();
     }//GEN-LAST:event_bAnalizarActionPerformed
+
+    private void bDiagramaActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_bDiagramaActionPerformed
+    if (tTrans.getText().isEmpty()) {
+
+        JOptionPane.showMessageDialog(
+            null,
+            "Debe ingresar un texto",
+            "Advertencia",
+            JOptionPane.WARNING_MESSAGE
+        );
+
+    } else {
+
+        Diagrama diagrama = new Diagrama();
+
+        diagrama.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        diagrama.setLocationRelativeTo(null);
+        diagrama.setResizable(false);
+        diagrama.setVisible(true);
+
+        this.setVisible(false);
+
+        diagrama.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosed(WindowEvent e) {
+                setVisible(true);
+            }
+        });
+    }
+    }//GEN-LAST:event_bDiagramaActionPerformed
 
         // =================================================================
         //   EJECUCIÓN DEL ANÁLISIS (orquesta Thompson + simulación AFN)
@@ -272,11 +345,15 @@ public class Ventana_Thompson extends javax.swing.JFrame {
     private void ejecutarAnalisis() {
         tSalida.setText("");
         tError.setText("");
+        tTrans.setText("");
         DefaultTableModel modelo = (DefaultTableModel) tablaSimbolo.getModel();
         modelo.setRowCount(0);
 
         String expresion = tExpresion.getText();
         String entrada = tIngreso.getText();
+        // Listado de transiciones del AFN de Thompson (delegado a Transitions).
+        tTrans.setText(Transitions.generar(expresion));
+
 
         if (expresion == null || expresion.trim().isEmpty()) {
             tError.append("Error: la expresión regular está vacía.\n");
@@ -1390,9 +1467,11 @@ public class Ventana_Thompson extends javax.swing.JFrame {
 
     // Variables declaration - do not modify//GEN-BEGIN:variables
     private javax.swing.JButton bAnalizar;
+    private javax.swing.JButton bDiagrama;
     private javax.swing.JLabel jLabel1;
     private javax.swing.JLabel jLabel2;
     private javax.swing.JLabel jLabel3;
+    private javax.swing.JLabel jLabel4;
     private javax.swing.JPanel jPanel1;
     private javax.swing.JScrollPane jScrollPane2;
     private javax.swing.JScrollPane jScrollPane3;
