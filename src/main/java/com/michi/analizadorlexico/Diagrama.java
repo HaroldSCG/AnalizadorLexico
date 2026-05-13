@@ -4,19 +4,25 @@
  */
 package com.michi.analizadorlexico;
 
+import java.awt.BorderLayout;
 import java.util.List;
+
+import javax.swing.JScrollPane;
 
 /**
  * Ventana que muestra el diagrama (grafo) del AFN construido con el
  * algoritmo de Thompson para una expresión regular.
  *
- * <p>La ventana contiene un único {@link javax.swing.JPanel} llamado
- * {@code jGraph} (de tipo {@link ThompsonGraphPanel}) dentro de un
- * {@code JScrollPane}, de manera que el diagrama puede desplazarse
- * cuando es más grande que la ventana.</p>
+ * <p>El formulario asociado ({@code Diagrama.form}) contiene un único
+ * {@link javax.swing.JPanel} llamado {@code jGraph} que ocupa toda la
+ * ventana. El motor de pintura ({@link ThompsonGraphPanel}) se inserta
+ * dentro de {@code jGraph} de forma programática (envuelto en un
+ * {@code JScrollPane} para soportar grafos grandes), de modo que el
+ * archivo {@code .form} permanece sencillo y editable visualmente en
+ * NetBeans sin requerir clases personalizadas.</p>
  *
- * <p>El método {@link #mostrar(String)} es la API pública para abrir el
- * diagrama desde otros formularios (en particular desde el botón
+ * <p>La API pública {@link #mostrar(String)} es la entrada principal
+ * desde otros formularios (en particular desde el botón
  * {@code bDiagrama} de {@link Ventana_Thompson}).</p>
  *
  * @author harol
@@ -25,10 +31,19 @@ public class Diagrama extends javax.swing.JFrame {
 
     private static Diagrama instancia;
 
+    /** Lienzo donde se dibuja realmente el grafo (hijo de {@code jGraph}). */
+    private final ThompsonGraphPanel lienzo = new ThompsonGraphPanel();
+
     public Diagrama() {
         initComponents();
+        // jGraph es un JPanel "limpio" generado por el .form. Aquí lo
+        // configuramos para que albergue el lienzo de pintura dentro de
+        // un JScrollPane, ocupando todo su área.
+        jGraph.setLayout(new BorderLayout());
+        jGraph.add(new JScrollPane(lienzo), BorderLayout.CENTER);
+
         setLocationRelativeTo(null);
-        jGraph.setMensaje("Escriba una expresión regular y pulse 'Diagrama' "
+        lienzo.setMensaje("Escriba una expresión regular y pulse 'Diagrama' "
                 + "en la ventana principal.", false);
     }
 
@@ -56,7 +71,7 @@ public class Diagrama extends javax.swing.JFrame {
     public void actualizarDesdeExpresion(String expresion) {
         if (expresion == null || expresion.trim().isEmpty()) {
             setTitle("Diagrama de Thompson");
-            jGraph.setMensaje("La expresión regular está vacía.", true);
+            lienzo.setMensaje("La expresión regular está vacía.", true);
             return;
         }
         // Aceptar el modo multi-patrón "TIPO=regex;..." reutilizando el
@@ -66,13 +81,13 @@ public class Diagrama extends javax.swing.JFrame {
             patrones = Ventana_Thompson.parsearPatrones(expresion);
         } catch (RuntimeException ex) {
             setTitle("Diagrama de Thompson");
-            jGraph.setMensaje("No fue posible interpretar la expresión: "
+            lienzo.setMensaje("No fue posible interpretar la expresión: "
                     + ex.getMessage(), true);
             return;
         }
         if (patrones.isEmpty()) {
             setTitle("Diagrama de Thompson");
-            jGraph.setMensaje("La expresión regular está vacía.", true);
+            lienzo.setMensaje("La expresión regular está vacía.", true);
             return;
         }
 
@@ -80,7 +95,7 @@ public class Diagrama extends javax.swing.JFrame {
         String regex = primero.regex;
         try {
             ThompsonGraph grafo = ThompsonGraph.fromRegex(regex);
-            jGraph.setGrafo(grafo);
+            lienzo.setGrafo(grafo);
             if (patrones.size() > 1) {
                 setTitle("Diagrama de Thompson  —  patrón '" + primero.tipo
                         + "'  (mostrando el primero de " + patrones.size() + ")");
@@ -89,7 +104,7 @@ public class Diagrama extends javax.swing.JFrame {
             }
         } catch (RuntimeException ex) {
             setTitle("Diagrama de Thompson");
-            jGraph.setMensaje("No fue posible construir el diagrama: "
+            lienzo.setMensaje("No fue posible construir el diagrama: "
                     + ex.getMessage(), true);
         }
     }
@@ -98,24 +113,34 @@ public class Diagrama extends javax.swing.JFrame {
     // <editor-fold defaultstate="collapsed" desc="Generated Code">//GEN-BEGIN:initComponents
     private void initComponents() {
 
-        jScrollPaneGrafo = new javax.swing.JScrollPane();
-        jGraph = new com.michi.analizadorlexico.ThompsonGraphPanel();
+        jGraph = new javax.swing.JPanel();
 
         setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE);
         setTitle("Diagrama de Thompson");
         setPreferredSize(new java.awt.Dimension(900, 500));
 
-        jScrollPaneGrafo.setViewportView(jGraph);
+        jGraph.setBackground(new java.awt.Color(255, 255, 255));
+
+        javax.swing.GroupLayout jGraphLayout = new javax.swing.GroupLayout(jGraph);
+        jGraph.setLayout(jGraphLayout);
+        jGraphLayout.setHorizontalGroup(
+            jGraphLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGap(0, 900, Short.MAX_VALUE)
+        );
+        jGraphLayout.setVerticalGroup(
+            jGraphLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGap(0, 500, Short.MAX_VALUE)
+        );
 
         javax.swing.GroupLayout layout = new javax.swing.GroupLayout(getContentPane());
         getContentPane().setLayout(layout);
         layout.setHorizontalGroup(
             layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-            .addComponent(jScrollPaneGrafo, javax.swing.GroupLayout.DEFAULT_SIZE, 900, Short.MAX_VALUE)
+            .addComponent(jGraph, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
         );
         layout.setVerticalGroup(
             layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-            .addComponent(jScrollPaneGrafo, javax.swing.GroupLayout.DEFAULT_SIZE, 500, Short.MAX_VALUE)
+            .addComponent(jGraph, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
         );
 
         pack();
@@ -144,7 +169,6 @@ public class Diagrama extends javax.swing.JFrame {
     }
 
     // Variables declaration - do not modify//GEN-BEGIN:variables
-    private com.michi.analizadorlexico.ThompsonGraphPanel jGraph;
-    private javax.swing.JScrollPane jScrollPaneGrafo;
+    private javax.swing.JPanel jGraph;
     // End of variables declaration//GEN-END:variables
 }
