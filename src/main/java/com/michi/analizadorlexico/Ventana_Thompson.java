@@ -272,6 +272,7 @@ public class Ventana_Thompson extends javax.swing.JFrame {
     private void ejecutarAnalisis() {
         tSalida.setText("");
         tError.setText("");
+        tTrans.setText("");
         DefaultTableModel modelo = (DefaultTableModel) tablaSimbolo.getModel();
         modelo.setRowCount(0);
 
@@ -305,6 +306,10 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             tError.append("Error en la expresión regular: " + ex.getMessage() + "\n");
             return;
         }
+
+        // 2.b) Volcar las transiciones del AFN construido al panel tTrans.
+        tTrans.setText(dumpTransiciones(afn, patrones));
+        tTrans.setCaretPosition(0);
 
         // 3) Analizar la cadena de entrada con el simulador del AFN.
         SimuladorAFN simulador = new SimuladorAFN(afn);
@@ -495,6 +500,149 @@ public class Ventana_Thompson extends javax.swing.JFrame {
         return partes;
     }
 
+    // =================================================================
+    //   IMPRESIÓN DE TRANSICIONES DEL AFN (algoritmo de Thompson)
+    // =================================================================
+
+    /**
+     * Devuelve una representación legible del AFN construido por
+     * Thompson, mostrando:
+     *
+     * <ul>
+     *   <li>La/s expresión/es regular/es origen.</li>
+     *   <li>Número total de estados, estado inicial y estado(s) de
+     *       aceptación (con su etiqueta de tipo cuando corresponde).</li>
+     *   <li>Cada transición en el formato {@code qX --símbolo--> qY},
+     *       donde el símbolo es el carácter consumido o {@code ε} para
+     *       las transiciones vacías; las clases de caracteres se
+     *       representan compactando rangos contiguos, por ejemplo
+     *       {@code [a-zA-Z]}.</li>
+     * </ul>
+     *
+     * Las transiciones se ordenan por id del estado origen y, dentro de
+     * cada estado, primero las que consumen símbolo y luego las ε.
+     */
+    static String dumpTransiciones(AFN afn, List<PatronRegex> patrones) {
+        StringBuilder sb = new StringBuilder();
+
+        if (patrones.size() == 1) {
+            PatronRegex p = patrones.get(0);
+            sb.append("AFN de Thompson para: ").append(p.regex).append('\n');
+            if (!TIPO_AUTO.equals(p.tipo)) {
+                sb.append("Tipo de token:       ").append(p.tipo).append('\n');
+            }
+        } else {
+            sb.append("AFN de Thompson combinado (").append(patrones.size()).append(" patrones):\n");
+            for (PatronRegex p : patrones) {
+                String tipo = TIPO_AUTO.equals(p.tipo) ? "(sin etiqueta)" : p.tipo;
+                sb.append("  - ").append(tipo).append(" = ").append(p.regex).append('\n');
+            }
+        }
+        sb.append('\n');
+
+        List<Estado> estados = recolectarEstadosOrdenados(afn);
+        List<Estado> aceptantes = new ArrayList<>();
+        for (Estado e : estados) {
+            if (e.esAceptante()) aceptantes.add(e);
+        }
+
+        sb.append("Estados:              ").append(estados.size()).append('\n');
+        sb.append("Estado inicial:       q").append(afn.inicio.id).append('\n');
+
+        if (aceptantes.isEmpty()) {
+            sb.append("Estado de aceptación: (ninguno)\n");
+        } else if (aceptantes.size() == 1) {
+            Estado e = aceptantes.get(0);
+            sb.append("Estado de aceptación: q").append(e.id);
+            if (!TIPO_AUTO.equals(e.etiquetaTipo)) {
+                sb.append("  [").append(e.etiquetaTipo).append(']');
+            }
+            sb.append('\n');
+        } else {
+            sb.append("Estados de aceptación:\n");
+            for (Estado e : aceptantes) {
+                String tipo = TIPO_AUTO.equals(e.etiquetaTipo) ? "" : "  [" + e.etiquetaTipo + "]";
+                sb.append("  q").append(e.id).append(tipo)
+                  .append(" (prioridad ").append(e.prioridad).append(")\n");
+            }
+        }
+        sb.append('\n');
+
+        sb.append("Transiciones:\n");
+        for (Estado origen : estados) {
+            List<Transicion> ordenadas = new ArrayList<>(origen.transiciones);
+            ordenadas.sort((a, b) -> {
+                if (a.epsilon != b.epsilon) return a.epsilon ? 1 : -1;
+                return Integer.compare(a.destino.id, b.destino.id);
+            });
+            for (Transicion t : ordenadas) {
+                sb.append('q').append(origen.id)
+                  .append(" --").append(formatearEtiquetaTransicion(t)).append("--> ")
+                  .append('q').append(t.destino.id).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    /** BFS desde el estado inicial y devuelve los estados ordenados por id. */
+    private static List<Estado> recolectarEstadosOrdenados(AFN afn) {
+        LinkedHashSet<Estado> visitados = new LinkedHashSet<>();
+        List<Estado> pila = new ArrayList<>();
+        if (afn.inicio != null) {
+            visitados.add(afn.inicio);
+            pila.add(afn.inicio);
+        }
+        while (!pila.isEmpty()) {
+            Estado e = pila.remove(pila.size() - 1);
+            for (Transicion t : e.transiciones) {
+                if (!visitados.contains(t.destino)) {
+                    visitados.add(t.destino);
+                    pila.add(t.destino);
+                }
+            }
+        }
+        List<Estado> ordenados = new ArrayList<>(visitados);
+        ordenados.sort((a, b) -> Integer.compare(a.id, b.id));
+        return ordenados;
+    }
+
+    /** Devuelve la etiqueta de una transición para imprimir: 'ε', un carácter, o una clase compacta '[a-z]'. */
+    private static String formatearEtiquetaTransicion(Transicion t) {
+        if (t.epsilon) return "ε";
+        Set<Character> chars = t.simbolos;
+        if (chars == null || chars.isEmpty()) return "?";
+        if (chars.size() == 1) {
+            return String.valueOf(chars.iterator().next());
+        }
+        return formatearClaseCaracteres(chars);
+    }
+
+    /** Compacta un conjunto de caracteres en notación [a-zA-Z0-9...] cuando es posible. */
+    private static String formatearClaseCaracteres(Set<Character> chars) {
+        List<Character> ordenados = new ArrayList<>(chars);
+        ordenados.sort((a, b) -> a - b);
+        StringBuilder sb = new StringBuilder("[");
+        int i = 0;
+        while (i < ordenados.size()) {
+            char ini = ordenados.get(i);
+            char fin = ini;
+            while (i + 1 < ordenados.size() && ordenados.get(i + 1) == fin + 1) {
+                fin++;
+                i++;
+            }
+            if (ini == fin) {
+                sb.append(ini);
+            } else if (fin == ini + 1) {
+                sb.append(ini).append(fin);
+            } else {
+                sb.append(ini).append('-').append(fin);
+            }
+            i++;
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
     /** Devuelve la posición del primer '=' que no esté dentro de [...] o (...). */
     private static int posicionIgualTopLevel(String s) {
         int parens = 0, brackets = 0;
@@ -628,6 +776,24 @@ public class Ventana_Thompson extends javax.swing.JFrame {
             if (patrones == null || patrones.isEmpty()) {
                 throw new RuntimeException("No se proporcionaron patrones");
             }
+            // Caso simple: un único patrón. Se evita añadir un estado
+            // inicial envolvente extra y se conserva el AFN tal como lo
+            // produce Thompson (esto deja los ids de los estados
+            // alineados con la construcción canónica que se muestra en
+            // los textos teóricos).
+            if (patrones.size() == 1) {
+                PatronRegex p = patrones.get(0);
+                AFN sub;
+                try {
+                    sub = construir(p.regex);
+                } catch (RuntimeException ex) {
+                    throw new RuntimeException("Patrón '" + p.tipo + "': " + ex.getMessage());
+                }
+                sub.fin.etiquetaTipo = p.tipo;
+                sub.fin.prioridad = 0;
+                return sub;
+            }
+
             AFN master = new AFN();
             master.inicio = nuevoEstado();
             master.fin = null; // los aceptantes son múltiples y se reconocen por etiquetaTipo
